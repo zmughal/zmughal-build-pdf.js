@@ -1,0 +1,13 @@
+#!/bin/sh
+
+CURDIR=`dirname "$0"`
+TARGET_DIR="vendor"
+cd "$CURDIR"
+rm -Rf $TARGET_DIR; mkdir $TARGET_DIR
+rm -Rf src/build
+( cd src && node make generic )
+rsync --exclude="*.pdf" --exclude="debugger.js" -avP src/build/generic/ $TARGET_DIR
+COMMIT=$(git --git-dir=src/.git log | head -1 | sed 's,^commit ,,')
+
+git add vendor
+git commit -m 'build from mozilla/pdf.js@'"$COMMIT"
