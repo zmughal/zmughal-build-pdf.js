@@ -21,8 +21,8 @@ if (typeof PDFJS === 'undefined') {
   (typeof window !== 'undefined' ? window : this).PDFJS = {};
 }
 
-PDFJS.version = '1.0.275';
-PDFJS.build = '3408921';
+PDFJS.version = '1.0.296';
+PDFJS.build = '43a103d';
 
 (function pdfjsWrapper() {
   // Use strict in our context only - users might not want it
@@ -2386,8 +2386,7 @@ var NetworkManager = (function NetworkManagerClosure() {
   }
 
   function getArrayBuffer(xhr) {
-    var data = (xhr.mozResponseArrayBuffer || xhr.mozResponse ||
-                xhr.responseArrayBuffer || xhr.response);
+    var data = xhr.response;
     if (typeof data !== 'string') {
       return data;
     }
@@ -2439,7 +2438,7 @@ var NetworkManager = (function NetworkManagerClosure() {
         pendingRequest.expectedStatus = 200;
       }
 
-      xhr.mozResponseType = xhr.responseType = 'arraybuffer';
+      xhr.responseType = 'arraybuffer';
 
       if (args.onProgress) {
         xhr.onprogress = args.onProgress;
@@ -3871,15 +3870,15 @@ var Dict = (function DictClosure() {
     getAsync: function Dict_getAsync(key1, key2, key3) {
       var value;
       var xref = this.xref;
-      if (typeof (value = this.map[key1]) !== undefined || key1 in this.map ||
-          typeof key2 === undefined) {
+      if (typeof (value = this.map[key1]) !== 'undefined' || key1 in this.map ||
+          typeof key2 === 'undefined') {
         if (xref) {
           return xref.fetchIfRefAsync(value);
         }
         return Promise.resolve(value);
       }
-      if (typeof (value = this.map[key2]) !== undefined || key2 in this.map ||
-          typeof key3 === undefined) {
+      if (typeof (value = this.map[key2]) !== 'undefined' || key2 in this.map ||
+          typeof key3 === 'undefined') {
         if (xref) {
           return xref.fetchIfRefAsync(value);
         }
@@ -18162,8 +18161,8 @@ var CMap = (function CMapClosure() {
     },
 
     mapRangeToArray: function(low, high, array) {
-      var i = 0;
-      while (low <= high) {
+      var i = 0, ii = array.length;
+      while (low <= high && i < ii) {
         this.map[low] = array[i++];
         ++low;
       }
@@ -21742,7 +21741,12 @@ var Font = (function FontClosure() {
 
         if (!potentialTable) {
           warn('Could not find a preferred cmap table.');
-          return [];
+          return {
+            platformId: -1,
+            encodingId: -1,
+            mappings: [],
+            hasShortCmap: false
+          };
         }
 
         font.pos = start + potentialTable.offset;
@@ -36141,9 +36145,27 @@ var JpegStream = (function JpegStreamClosure() {
     }
     try {
       var jpegImage = new JpegImage();
-      if (this.colorTransform != -1) {
-        jpegImage.colorTransform = this.colorTransform;
+
+      // checking if values needs to be transformed before conversion
+      if (this.dict && isArray(this.dict.get('Decode'))) {
+        var decodeArr = this.dict.get('Decode');
+        var bitsPerComponent = this.dict.get('BitsPerComponent') || 8;
+        var decodeArrLength = decodeArr.length;
+        var transform = new Int32Array(decodeArrLength);
+        var transformNeeded = false;
+        var maxValue = (1 << bitsPerComponent) - 1;
+        for (var i = 0; i < decodeArrLength; i += 2) {
+          transform[i] = ((decodeArr[i + 1] - decodeArr[i]) * 256) | 0;
+          transform[i + 1] = (decodeArr[i] * maxValue) | 0;
+          if (transform[i] !== 256 || transform[i + 1] !== 0) {
+            transformNeeded = true;
+          }
+        }
+        if (transformNeeded) {
+          jpegImage.decodeTransform = transform;
+        }
       }
+
       jpegImage.parse(this.bytes);
       var data = jpegImage.getData(this.drawWidth, this.drawHeight,
                                    /* forceRGBoutput = */true);
@@ -39062,7 +39084,7 @@ var JpegImage = (function jpegImage() {
       var scaleX = this.width / width, scaleY = this.height / height;
 
       var component, componentScaleX, componentScaleY, blocksPerScanline;
-      var x, y, i, j;
+      var x, y, i, j, k;
       var index;
       var offset = 0;
       var output;
@@ -39094,6 +39116,17 @@ var JpegImage = (function jpegImage() {
           }
         }
       }
+
+      // decodeTransform will contains pairs of multiplier (-256..256) and
+      // additive
+      var transform = this.decodeTransform;
+      if (transform) {
+        for (i = 0; i < dataLength;) {
+          for (j = 0, k = 0; j < numComponents; j++, i++, k += 2) {
+            data[i] = ((data[i] * transform[k]) >> 8) + transform[k + 1];
+          }
+        }
+      }
       return data;
     },
 
@@ -39103,8 +39136,6 @@ var JpegImage = (function jpegImage() {
         return true;
       } else if (this.numComponents == 3) {
         return true;
-      } else if (typeof this.colorTransform !== 'undefined') {
-        return !!this.colorTransform;
       } else {
         return false;
       }
@@ -39112,7 +39143,7 @@ var JpegImage = (function jpegImage() {
 
     _convertYccToRgb: function convertYccToRgb(data) {
       var Y, Cb, Cr;
-      for (var i = 0; i < data.length; i += this.numComponents) {
+      for (var i = 0, length = data.length; i < length; i += 3) {
         Y  = data[i    ];
         Cb = data[i + 1];
         Cr = data[i + 2];
@@ -39126,7 +39157,7 @@ var JpegImage = (function jpegImage() {
     _convertYcckToRgb: function convertYcckToRgb(data) {
       var Y, Cb, Cr, k, CbCb, CbCr, CbY, Cbk, CrCr, Crk, CrY, YY, Yk, kk;
       var offset = 0;
-      for (var i = 0; i < data.length; i += this.numComponents) {
+      for (var i = 0, length = data.length; i < length; i += 4) {
         Y  = data[i];
         Cb = data[i + 1];
         Cr = data[i + 2];
@@ -39179,7 +39210,7 @@ var JpegImage = (function jpegImage() {
 
     _convertYcckToCmyk: function convertYcckToCmyk(data) {
       var Y, Cb, Cr;
-      for (var i = 0; i < data.length; i += this.numComponents) {
+      for (var i = 0, length = data.length; i < length; i += 4) {
         Y  = data[i];
         Cb = data[i + 1];
         Cr = data[i + 2];
@@ -39194,14 +39225,13 @@ var JpegImage = (function jpegImage() {
     _convertCmykToRgb: function convertCmykToRgb(data) {
       var c, m, y, k;
       var offset = 0;
-      var length = data.length;
       var min = -255 * 255 * 255;
       var scale = 1 / 255 / 255;
-      for (var i = 0; i < length;) {
-        c = data[i++];
-        m = data[i++];
-        y = data[i++];
-        k = data[i++];
+      for (var i = 0, length = data.length; i < length; i += 4) {
+        c = data[i];
+        m = data[i + 1];
+        y = data[i + 2];
+        k = data[i + 3];
 
         var r =
           c * (-4.387332384609988 * c + 54.48615194189176 * m +
@@ -39278,20 +39308,6 @@ var JpxImage = (function JpxImageClosure() {
     this.failOnCorruptedImage = false;
   }
   JpxImage.prototype = {
-    load: function JpxImage_load(url) {
-      var xhr = new XMLHttpRequest();
-      xhr.open('GET', url, true);
-      xhr.responseType = 'arraybuffer';
-      xhr.onload = (function() {
-        // TODO catch parse error
-        var data = new Uint8Array(xhr.response || xhr.mozResponseArrayBuffer);
-        this.parse(data);
-        if (this.onload) {
-          this.onload();
-        }
-      }).bind(this);
-      xhr.send(null);
-    },
     parse: function JpxImage_parse(data) {
 
       var head = readUint16(data, 0);
